@@ -1,2 +1,5 @@
 서버 실행 D:\youtube-trend\backend\venv\Scripts\activate
 uvicorn main:app --reload
+깃허브 토큰 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
+
+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
