@@ -22,7 +22,10 @@ app.add_middleware(
 )
 
 # DB 설정
-engine = create_engine("sqlite:///youtube_trend.db")
+engine = create_engine(
+    "sqlite:///youtube_trend.db",
+    connect_args={"check_same_thread": False}
+)
 Base = declarative_base()
 Session = sessionmaker(bind=engine)
 
@@ -380,8 +383,9 @@ def get_trending():
     finally:
         session.close()
 
-# 서버 시작 시 즉시 수집 + 1시간마다 자동 수집
-scheduler = BackgroundScheduler()
-scheduler.add_job(fetch_and_save, "interval", hours=1, next_run_time=datetime.now())
-scheduler.add_job(search_and_supplement, "interval", hours=6, next_run_time=datetime.now())
-scheduler.start()
+@app.on_event("startup")
+async def startup_event():
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(fetch_and_save, "interval", hours=1, next_run_time=datetime.now())
+    scheduler.add_job(search_and_supplement, "interval", hours=6, next_run_time=datetime.now())
+    scheduler.start()
