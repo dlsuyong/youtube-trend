@@ -1,0 +1,2 @@
+서버 실행 D:\youtube-trend\backend\venv\Scripts\activate
+uvicorn main:app --reload
