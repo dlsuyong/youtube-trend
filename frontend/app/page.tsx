@@ -33,7 +33,7 @@ export default function Home() {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/trending")
+    fetch("https://satisfied-eagerness-production-67a7.up.railway.app/api/trending")
       .then((res) => res.json())
       .then((data) => {
         setCategories(data.categories);
