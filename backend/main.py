@@ -63,6 +63,19 @@ CATEGORIES = {
     "29": "비영리/사회운동",
 }
 
+# search.list로 보충할 카테고리
+SEARCH_CATEGORIES = {
+    "1":  "영화/애니메이션",
+    "2":  "자동차",
+    "15": "동물",
+    "17": "스포츠",
+    "19": "여행/이벤트",
+    "23": "코미디",
+    "24": "엔터테인먼트",
+    "27": "교육",
+    "29": "비영리/사회운동",
+}
+
 def parse_duration_seconds(duration):
     match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration)
     hours = int(match.group(1) or 0)
@@ -145,6 +158,7 @@ def fetch_and_save():
                 else:
                     longform.append((v, score))
 
+            print(f"[{category_name}] 롱폼: {len(longform)}개 / 쇼츠: {len([v for v in videos if check_shorts(v)])}개")
             # 롱폼 상위 10개 저장
             if len(longform) < 3:
                 continue
@@ -169,6 +183,7 @@ def fetch_and_save():
                     updated_at=datetime.now()
                 ))
 
+        
         # 쇼츠 상위 20개 저장
         shorts_sorted = sorted(all_shorts, key=lambda x: x[1], reverse=True)[:20]
         for v, score in shorts_sorted:
@@ -194,6 +209,100 @@ def fetch_and_save():
 
     except Exception as e:
         print(f"[{datetime.now()}] 오류: {e}")
+        session.rollback()
+    finally:
+        session.close()
+
+def search_and_supplement():
+    print(f"[{datetime.now()}] search.list 보충 시작...")
+    session = Session()
+
+    try:
+        for category_id, category_name in SEARCH_CATEGORIES.items():
+            # 현재 해당 카테고리 롱폼 영상 수 확인
+            count = session.query(Video).filter(
+                Video.category_id == category_id,
+                Video.is_shorts == 0
+            ).count()
+
+            # 10개 이상이면 보충 불필요
+            if count >= 10:
+                continue
+
+            needed = 10 - count
+            print(f"[{category_name}] {needed}개 보충 필요")
+
+            url = "https://www.googleapis.com/youtube/v3/search"
+            params = {
+                "part": "snippet",
+                "type": "video",
+                "videoCategoryId": category_id,
+                "regionCode": "KR",
+                "relevanceLanguage": "ko",
+                "order": "viewCount",
+                "videoDuration": "medium",  # 4분~20분 (롱폼)
+                "maxResults": 20,
+                "key": API_KEY
+            }
+            response = requests.get(url, params=params)
+            items = response.json().get("items", [])
+
+            if not items:
+                continue
+
+            # video ID 목록으로 상세 정보 조회
+            video_ids = [item["id"]["videoId"] for item in items]
+            detail_url = "https://www.googleapis.com/youtube/v3/videos"
+            detail_params = {
+                "part": "snippet,statistics,contentDetails",
+                "id": ",".join(video_ids),
+                "key": API_KEY
+            }
+            detail_response = requests.get(detail_url, params=detail_params)
+            videos = detail_response.json().get("items", [])
+
+            # 롱폼만 필터링 후 점수 계산
+            longform = [v for v in videos if not check_shorts(v)]
+            scored = []
+            for v in longform:
+                stats = v["statistics"]
+                views = int(stats.get("viewCount", 0))
+                likes = int(stats.get("likeCount", 0))
+                comments = int(stats.get("commentCount", 0))
+                published_at = v["snippet"]["publishedAt"]
+                score = custom_score(views, likes, comments, published_at)
+                scored.append((v, score))
+
+            scored_sorted = sorted(scored, key=lambda x: x[1], reverse=True)[:needed]
+
+            for v, score in scored_sorted:
+                # 이미 있는 영상은 건너뜀
+                exists = session.query(Video).filter(Video.id == v["id"]).first()
+                if exists:
+                    continue
+
+                session.add(Video(
+                    id=v["id"],
+                    title=v["snippet"]["title"],
+                    channel=v["snippet"]["channelTitle"],
+                    thumbnail=v["snippet"]["thumbnails"]["high"]["url"],
+                    published_at=v["snippet"]["publishedAt"],
+                    views=int(v["statistics"].get("viewCount", 0)),
+                    likes=int(v["statistics"].get("likeCount", 0)),
+                    comments=int(v["statistics"].get("commentCount", 0)),
+                    score=score,
+                    url=f"https://www.youtube.com/watch?v={v['id']}",
+                    category_id=category_id,
+                    category_name=category_name,
+                    is_shorts=0,
+                    updated_at=datetime.now()
+                ))
+
+        session.commit()
+        print(f"[{datetime.now()}] search.list 보충 완료")
+
+    except Exception as e:
+        print(f"[{datetime.now()}] 보충 오류: {e}")
         session.rollback()
     finally:
         session.close()
@@ -274,4 +383,5 @@ def get_trending():
 # 서버 시작 시 즉시 수집 + 1시간마다 자동 수집
 scheduler = BackgroundScheduler()
 scheduler.add_job(fetch_and_save, "interval", hours=1, next_run_time=datetime.now())
+scheduler.add_job(search_and_supplement, "interval", hours=6, next_run_time=datetime.now())
 scheduler.start()
